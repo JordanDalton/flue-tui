@@ -1,0 +1,14 @@
+{
+	"compilerOptions": {
+		"target": "es2022",
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"jsx": "react-jsx",
+		"strict": true,
+		"skipLibCheck": true,
+		"allowImportingTsExtensions": true,
+		"noEmit": true,
+		"types": ["node", "vite/client"]
+	},
+	"include": ["src", "tui", "scripts", "*.ts"]
+}

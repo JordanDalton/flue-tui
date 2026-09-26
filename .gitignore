@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Secrets: API keys live here. Copy .env.example to .env instead.
+.env
+.env.*
+!.env.example
+
+# Local data: every conversation (Flue's database) and the workers store
+data/
+
+# Personal TUI state and removed agents' files
+.flue-tui.json
+.removed-agents/
+
+# Tooling
+.claude/settings.local.json
+dist/
+*.log
+.DS_Store

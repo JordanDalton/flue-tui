@@ -1,0 +1,27 @@
+{
+	"servers": {
+		"tabfleet": {
+			"url": "https://tabfleet.com/",
+			"auth": "${TABFLEET_API_KEY}",
+			"agents": [],
+			"tools": [
+				"list_sessions",
+				"get_usage",
+				"launch_browser",
+				"close_browser",
+				"get_live_view",
+				"browser_tabs",
+				"browser_current_tab",
+				"browser_select_tab",
+				"browser_new_tab",
+				"browser_close_tab",
+				"browser_snapshot",
+				"browser_screenshot",
+				"browser_navigate",
+				"browser_click",
+				"browser_fill",
+				"browser_scroll"
+			]
+		}
+	}
+}

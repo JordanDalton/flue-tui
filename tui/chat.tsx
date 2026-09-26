@@ -142,6 +142,59 @@ function pendingDelegations(messages: FlueConversationMessage[]) {
 	return [...pending.values()];
 }
 
+const NO_BROWSER = 'no browser open yet — ask the agent to open the page in its browser, then /view';
+
+/**
+ * Threads this conversation handed work to, most recent last. A worker's browser
+ * lives in its own thread; /view follows these when this thread has no session.
+ * Output text is the receipt from spawn_worker and message_agent.
+ */
+function delegatedThreads(messages: FlueConversationMessage[]): { agent: string; thread: string }[] {
+	const seen = new Map<string, { agent: string; thread: string }>();
+	for (const m of messages) {
+		for (const p of m.parts) {
+			if (p.type !== 'dynamic-tool' || p.state !== 'output-available' || typeof p.output !== 'string') continue;
+			const sent = /^Delivered to (\S+) \(thread ([^,]+),/.exec(p.output);
+			const spawned = /^Spawned worker (\S+) /.exec(p.output);
+			const target =
+				p.toolName === 'message_agent' && sent
+					? { agent: sent[1]!, thread: sent[2]! }
+					: p.toolName === 'spawn_worker' && spawned
+						? { agent: 'worker', thread: spawned[1]! }
+						: undefined;
+			if (!target) continue;
+			const key = `${target.agent}/${target.thread}`;
+			seen.delete(key); // re-insert so the latest hand-off sorts last
+			seen.set(key, target);
+		}
+	}
+	return [...seen.values()];
+}
+
+/** Latest Tabfleet session across delegated threads (the last thread that has one). */
+async function findDelegatedSession(
+	conn: Connection,
+	targets: { agent: string; thread: string }[],
+	signal?: AbortSignal,
+): Promise<string | undefined> {
+	const ids = await Promise.all(
+		targets.map(async (t) => {
+			try {
+				const client = createFlueClient({
+					url: `${conn.baseUrl}/agents/${t.agent}/${t.thread}`,
+					token: conn.token,
+				});
+				const snap = await client.history({ signal });
+				return findSessionId(snap.messages.flatMap((m) => m.parts));
+			} catch {
+				return undefined; // missing thread, or this lookup was aborted
+			}
+		}),
+	);
+	for (let i = ids.length - 1; i >= 0; i--) if (ids[i]) return ids[i];
+	return undefined;
+}
+
 interface MessageProps {
 	message: FlueConversationMessage;
 	agent: string;
@@ -272,6 +325,8 @@ interface ChatProps {
 	onCommand: (name: string, arg: string) => string | void;
 	/** Tells the app whether Tab is claimed for command completion. */
 	onCapturingTab: (capturing: boolean) => void;
+	/** Threads this conversation handed work to, so a hidden agent can still be opened. */
+	onDelegates?: (targets: { agent: string; thread: string }[]) => void;
 }
 
 // One conversation. Keyed by thread in the parent, so switching threads remounts it
@@ -287,6 +342,7 @@ export function Chat({
 	commandContext,
 	onCommand,
 	onCapturingTab,
+	onDelegates,
 }: ChatProps) {
 	const { client, observation } = useMemo(() => {
 		const client = createFlueClient({ url: `${conn.baseUrl}${mount}/${threadId}`, token: conn.token });
@@ -308,8 +364,29 @@ export function Chat({
 
 	const messages = snap.conversation?.messages ?? [];
 	const settlements = snap.conversation?.settlements ?? [];
-	// The thread's latest Tabfleet browser session, for /view.
-	const sessionId = useMemo(() => findSessionId(messages.flatMap((m) => m.parts)), [messages]);
+	// This thread's own browser, or the latest one a worker it delegated to has open.
+	const localSessionId = useMemo(() => findSessionId(messages.flatMap((m) => m.parts)), [messages]);
+	// Keyed so the list keeps its identity while the transcript streams. Agent and thread
+	// ids don't contain slashes (mount name, then conversation id).
+	const delegateKey = useMemo(
+		() => delegatedThreads(messages).map((d) => `${d.agent}/${d.thread}`).join('\n'),
+		[messages],
+	);
+	const delegates = useMemo(
+		() =>
+			delegateKey
+				.split('\n')
+				.filter(Boolean)
+				.map((line) => {
+					const i = line.indexOf('/');
+					return { agent: line.slice(0, i), thread: line.slice(i + 1) };
+				}),
+		[delegateKey],
+	);
+	useEffect(() => {
+		onDelegates?.(delegates);
+	}, [delegates, onDelegates]);
+	useEffect(() => () => onDelegates?.([]), [onDelegates]);
 
 	// Busy while any submission seen in the transcript has no settlement yet.
 	const busy = useMemo(() => {
@@ -322,6 +399,44 @@ export function Chat({
 		m.parts.some((p) => p.type === 'dynamic-tool' && p.state === 'input-available'),
 	);
 	const waiting = useMemo(() => pendingDelegations(messages), [messages]);
+	const pendingKey = waiting.map((w) => w.thread).join('\n');
+	const [remoteSessionId, setRemoteSessionId] = useState<string>();
+	const sessionId = localSessionId ?? remoteSessionId;
+	// /view closes the pane; don't pop the same session back open until a new one appears.
+	const closedSession = useRef<string | undefined>(undefined);
+	// Workers launch the browser in their own thread, often before they reply. Look it up
+	// once the delegations are known, and again while one of them is still working.
+	useEffect(() => {
+		if (localSessionId || delegates.length === 0) return;
+		const ac = new AbortController();
+		const load = (targets: { agent: string; thread: string }[]) =>
+			findDelegatedSession(conn, targets, ac.signal).then((id) => {
+				if (!ac.signal.aborted && id) setRemoteSessionId(id);
+			});
+		void load(delegates);
+		const pending = new Set(pendingKey.split('\n').filter(Boolean));
+		const pendingTargets = delegates.filter((d) => pending.has(d.thread));
+		if (pendingTargets.length === 0) return () => ac.abort();
+		const timer = setInterval(() => void load(pendingTargets), 2000);
+		return () => {
+			ac.abort();
+			clearInterval(timer);
+		};
+	}, [localSessionId, delegates, pendingKey, conn]);
+	// The browser a worker opened is watched from this thread, not by opening the worker.
+	useEffect(() => {
+		if (!sessionId || view || closedSession.current === sessionId) return;
+		let cancelled = false;
+		sessionStatus(sessionId).then(
+			(s) => {
+				if (!cancelled && s.status === 'active' && closedSession.current !== sessionId) setView('auto');
+			},
+			() => {},
+		);
+		return () => {
+			cancelled = true;
+		};
+	}, [sessionId, view]);
 	const [now, setNow] = useState(Date.now());
 	useEffect(() => {
 		if (!toolRunning && waiting.length === 0) return;
@@ -391,21 +506,19 @@ export function Chat({
 			case 'thinking':
 				setShowThinking((v) => !v);
 				break;
-			case 'view':
-				{
-					if (view) {
-						setView(false);
-						setDriving(false);
-						break;
-					}
-					if (!sessionId) {
-						setNotice('no browser in this thread yet — ask the agent to open the page in its browser, then /view');
-						break;
-					}
-					// Check first: the thread's browser may have expired since the agent last used it.
-					const mode = arg === 'blocks' ? 'blocks' : 'auto';
+			case 'view': {
+				if (view) {
+					closedSession.current = sessionId;
+					setView(false);
+					setDriving(false);
+					break;
+				}
+				closedSession.current = undefined;
+				const mode = arg === 'blocks' ? 'blocks' : 'auto';
+				// Check first: the browser may have expired since the agent last used it.
+				const open = (id: string) => {
 					setNotice('checking the browser…');
-					sessionStatus(sessionId).then(
+					sessionStatus(id).then(
 						(s) => {
 							if (s.status === 'active') {
 								setNotice(undefined);
@@ -417,7 +530,7 @@ export function Chat({
 								: '';
 							const why = s.closeReason === 'expired' ? ' when its time ran out' : '';
 							setNotice(
-								`the browser in this thread (${sessionId.slice(0, 8)}) ${s.status === 'closed' ? 'closed' : `is ${s.status}`}${when}${why} — ask the agent to open the page again, then /view`,
+								`the browser (${id.slice(0, 8)}) ${s.status === 'closed' ? 'closed' : `is ${s.status}`}${when}${why} — ask the agent to open the page again, then /view`,
 							);
 						},
 						// Can't check (no key, network): try anyway; the pane reports errors itself.
@@ -426,9 +539,29 @@ export function Chat({
 							setView(mode);
 						},
 					);
+				};
+				if (sessionId) {
+					open(sessionId);
 					break;
 				}
+				if (delegates.length === 0) {
+					setNotice(NO_BROWSER);
+					break;
+				}
+				setNotice('checking the browser…');
+				findDelegatedSession(conn, delegates).then(
+					(id) => {
+						if (!id) {
+							setNotice(NO_BROWSER);
+							return;
+						}
+						setRemoteSessionId(id);
+						open(id);
+					},
+					(e) => setNotice(`couldn't check the browser: ${e.message}`),
+				);
 				break;
+			}
 			case 'info': {
 				const running = messages.filter((m) => m.submissionId).length - settlements.length;
 				setNotice(
@@ -564,6 +697,7 @@ export function Chat({
 			? (maxCols: number, maxRows: number) => (
 					<BrowserView
 						sessionId={sessionId}
+						owner={localSessionId ? undefined : 'worker'}
 						blocks={view === 'blocks'}
 						maxCols={Math.max(20, maxCols)}
 						maxRows={Math.max(6, maxRows)}

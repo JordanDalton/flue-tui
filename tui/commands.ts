@@ -140,7 +140,7 @@ export const COMMANDS: Command[] = [
 		name: 'view',
 		args: '[blocks]',
 		optionalArgs: true,
-		description: 'show or hide this thread’s browser',
+		description: 'show or hide the browser for this conversation',
 		scope: 'chat',
 		complete: (arg) => matching(['blocks'], arg),
 	},

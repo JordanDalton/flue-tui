@@ -28,6 +28,8 @@ export interface BrowserInput {
 
 interface BrowserViewProps {
 	sessionId: string;
+	/** Whose browser this is, when it isn't this thread's own. */
+	owner?: string;
 	maxCols: number;
 	maxRows: number;
 	/** Force the half-block renderer even where Kitty graphics are available. */
@@ -75,6 +77,7 @@ function screenPosition(el: DOMElement) {
 // browser actions are refused until control is handed back (esc, or after idling).
 export function BrowserView({
 	sessionId,
+	owner,
 	maxCols,
 	maxRows,
 	blocks,
@@ -303,7 +306,7 @@ export function BrowserView({
 				</Text>
 			) : (
 				<Text dimColor wrap="truncate">
-					browser · {sessionId.slice(0, 8)} ·{' '}
+					{owner ? `${owner}'s browser` : 'browser'} · {sessionId.slice(0, 8)} ·{' '}
 					{connecting ? 'taking control…' : age === undefined ? 'loading…' : `updated ${age}s ago`}
 					{kitty ? '' : ' · blocks'} · click to take control · wheel scrolls · /view to close
 				</Text>

@@ -27,8 +27,13 @@ type ThreadRow = Extract<Row, { kind: 'thread' }>;
 
 // Flattens sections, agents and threads into the selectable rows the sidebar renders.
 // Sectioned threads show under their section (from any agent, even a hidden one) and
-// not under their agent.
-export function toRows(agents: TuiAgent[], layout: Layout): Row[] {
+// not under their agent. `reveal` lists threads to show anyway when their agent is
+// hidden — the open conversation delegated to them.
+export function toRows(
+	agents: TuiAgent[],
+	layout: Layout,
+	reveal: { agent: string; thread: string }[] = [],
+): Row[] {
 	const byKey = new Map<string, ThreadRow>();
 	for (const agent of agents) {
 		for (const t of agent.threads) {
@@ -65,10 +70,15 @@ export function toRows(agents: TuiAgent[], layout: Layout): Row[] {
 
 	for (const agent of agents) {
 		const key = agentKey(agent);
-		if (layout.hidden.includes(key)) continue;
+		const hidden = layout.hidden.includes(key);
+		const revealed = new Set(reveal.filter((r) => r.agent === key).map((r) => r.thread));
+		if (hidden && revealed.size === 0) continue;
 		const threads = [...byKey.entries()]
 			.filter(([k, row]) => row.agent === agent && !sectioned.has(k) && !archived.has(k))
+			.filter(([, row]) => !hidden || revealed.has(row.id))
 			.map(([, row]) => row);
+		// A hidden agent with nothing left to show (its delegation was archived) stays hidden.
+		if (hidden && threads.length === 0) continue;
 		const collapsed = layout.collapsed.includes(`agent:${key}`);
 		rows.push({ kind: 'agent', agent, count: threads.length, collapsed });
 		if (!collapsed) rows.push(...threads);

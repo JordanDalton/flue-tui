@@ -1,5 +1,7 @@
 # flue-tui
 
+![Chief of Staff with a worker's Tabfleet browser open beside the thread](docs/tui.jpg)
+
 A terminal UI for [Flue](https://flueframework.com) agents. You talk to a **Chief of Staff**; it
 answers what it can and runs a team of **workers** for everything else: web research, operating
 websites in a cloud browser you can watch and take over, and anything in between.
@@ -60,7 +62,7 @@ Type `/` for commands. The main ones:
 | Command | |
 |---|---|
 | `/new [agent]`, `/open [agent] <thread>` | Start or open a thread |
-| `/view` | Show this thread's browser; click it to take control |
+| `/view` | Show the browser for this conversation, including a worker's; click it to take control |
 | `/activity` | Messages between agents, across all threads |
 | `/archive`, `/pin`, `/section add <name>`, `/move <section>` | Organize the sidebar |
 | `/mcp add <name> <url> [--auth ENV_VAR] [--agents a,b]` | Add an MCP server (also `remove`, `grant`, `revoke`, `list`) |

@@ -105,6 +105,10 @@ function App() {
 	const [focus, setFocus] = useState<'input' | 'sidebar'>('input');
 	const [selected, setSelected] = useState(0);
 	const [layout, setLayoutState] = useState<Layout>(startLayout);
+	// Threads the open conversation delegated to. A hidden agent still lists these.
+	const [delegated, setDelegated] = useState<{ agent: string; thread: string }[]>([]);
+	// Delegations the user dismissed with x, so hiding an agent stays hidden.
+	const [dismissedDelegations, setDismissedDelegations] = useState<ReadonlySet<string>>(new Set());
 	const setLayout = (next: Layout) => {
 		setLayoutState(next);
 		saveLayout(next);
@@ -156,7 +160,19 @@ function App() {
 		});
 	}, [indexed, drafts, open]);
 
-	const rows = useMemo(() => toRows(agents, layout), [agents, layout]);
+	const revealed = useMemo(
+		() => delegated.filter((d) => !dismissedDelegations.has(`${d.agent}/${d.thread}`)),
+		[delegated, dismissedDelegations],
+	);
+	const rows = useMemo(() => toRows(agents, layout, revealed), [agents, layout, revealed]);
+	const onDelegates = useCallback((targets: { agent: string; thread: string }[]) => {
+		setDelegated((prev) => {
+			const same =
+				prev.length === targets.length &&
+				prev.every((p, i) => p.agent === targets[i]!.agent && p.thread === targets[i]!.thread);
+			return same ? prev : targets;
+		});
+	}, []);
 
 	// Remember the open thread for next time (only once it exists on the server).
 	useEffect(() => {
@@ -288,7 +304,15 @@ function App() {
 			case 'hide':
 			case 'show': {
 				if (!findAgent(arg)) return `no agent "${arg}"`;
-				setLayout(setHidden(layout, arg.toLowerCase(), name === 'hide'));
+				const key = arg.toLowerCase();
+				if (name === 'hide') {
+					setDismissedDelegations((prev) => {
+						const next = new Set(prev);
+						for (const d of delegated) if (d.agent === key) next.add(`${d.agent}/${d.thread}`);
+						return next;
+					});
+				}
+				setLayout(setHidden(layout, key, name === 'hide'));
 				return;
 			}
 			case 'agent': {
@@ -415,6 +439,12 @@ function App() {
 			const name = agentKey(row.agent);
 			if (name === 'chief' || name === 'worker') {
 				// Core agents can't be removed (the chief needs both), so x hides them instead.
+				// Dismiss the open thread's delegations too, or the agent would stay on screen.
+				setDismissedDelegations((prev) => {
+					const next = new Set(prev);
+					for (const d of delegated) if (d.agent === name) next.add(`${d.agent}/${d.thread}`);
+					return next;
+				});
 				setLayout(setHidden(layout, name, true));
 				setSelected((i) => Math.max(0, i - 1));
 				setIndexNotice(`${displayName(row.agent.name)} hidden — /show ${name} brings it back`);
@@ -475,6 +505,7 @@ function App() {
 					commandContext={commandContext}
 					onCommand={runCommand}
 					onCapturingTab={onCapturingTab}
+					onDelegates={onDelegates}
 				/>
 			)}
 		</Box>
